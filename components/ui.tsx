@@ -13,7 +13,7 @@ export function Card({
   return (
     <section
       className={clsx(
-        "rounded-[2rem] border border-white/70 bg-white/75 p-6 shadow-card backdrop-blur",
+        "rounded-2xl border border-white/80 bg-white/85 p-5 shadow-card backdrop-blur md:p-6",
         className
       )}
     >
@@ -33,7 +33,7 @@ export function Button({
   return (
     <button
       className={clsx(
-        "inline-flex items-center justify-center rounded-full px-4 py-2 text-sm font-bold transition duration-200 disabled:cursor-not-allowed disabled:opacity-50",
+        "inline-flex min-h-10 items-center justify-center rounded-lg px-4 py-2 text-sm font-bold transition duration-200 disabled:cursor-not-allowed disabled:opacity-50",
         variant === "primary" && "bg-ink text-cream shadow-lg shadow-ink/10 hover:-translate-y-0.5",
         variant === "secondary" && "bg-moss text-leaf hover:bg-[#e3f0dc]",
         variant === "ghost" && "bg-transparent text-ink hover:bg-ink/5",
@@ -58,7 +58,7 @@ export function TextArea({
   return (
     <textarea
       className={clsx(
-        "min-h-44 w-full resize-y rounded-3xl border border-sand/80 bg-cream/80 p-4 text-sm leading-6 text-ink shadow-inner placeholder:text-ink/35 focus:border-leaf focus:ring-4 focus:ring-leaf/10",
+        "min-h-44 w-full resize-y rounded-xl border border-sand/80 bg-cream/80 p-4 text-sm leading-6 text-ink shadow-inner placeholder:text-ink/35 focus:border-leaf focus:ring-4 focus:ring-leaf/10",
         className
       )}
       {...props}
@@ -78,7 +78,7 @@ export function Metric({
   return (
     <div
       className={clsx(
-        "rounded-3xl border p-4",
+        "rounded-xl border p-4",
         tone === "neutral" && "border-sand/80 bg-cream/80",
         tone === "good" && "border-leaf/20 bg-moss",
         tone === "warm" && "border-clay/20 bg-[#fff1e8]"

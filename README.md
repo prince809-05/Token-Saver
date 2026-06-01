@@ -120,6 +120,9 @@ Files:
 What it includes:
 
 - Save, edit, delete, and copy templates
+- Save outputs from every tool into the task vault
+- Export/import saved tasks as JSON
+- Launch saved tasks into GitHub Issues, Trello, Todoist, email, and Notion
 - Study, coding, business, and custom categories
 - Browser localStorage persistence
 - Data shape that can later move to a database
@@ -151,6 +154,8 @@ What it includes:
    - Install Command: `npm install`
    - Output Directory: leave empty
 5. Deploy.
+
+This repo also includes `vercel.json` and a Node 20+ engine requirement so Vercel uses the expected Next.js build path.
 
 No environment variables are required for the MVP.
 

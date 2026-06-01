@@ -7,6 +7,15 @@ export type ToolId =
 
 export type ProviderId = "gpt" | "claude" | "gemini";
 
+export type UsagePlanId =
+  | "chatgpt-free"
+  | "chatgpt-plus"
+  | "claude-free"
+  | "claude-pro"
+  | "gemini-free"
+  | "api-paid"
+  | "custom";
+
 export type TokenMetrics = {
   inputTokens: number;
   outputTokens?: number;
@@ -27,6 +36,7 @@ export type SavedTemplate = {
   title: string;
   category: TemplateCategory;
   content: string;
+  sourceTool?: ToolId;
   createdAt: string;
   updatedAt: string;
 };
