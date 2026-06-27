@@ -8,16 +8,16 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        ink: "#17211b",
-        leaf: "#2f6f4e",
-        moss: "#eef6e8",
-        cream: "#fbf7ee",
-        sand: "#eadfc8",
-        clay: "#b96f4a"
+        ink: "#172026",
+        leaf: "#0f766e",
+        moss: "#e6f4f1",
+        cream: "#f8fafc",
+        sand: "#d8dee6",
+        clay: "#b45309"
       },
       boxShadow: {
-        soft: "0 24px 80px rgba(39, 63, 47, 0.12)",
-        card: "0 18px 50px rgba(47, 111, 78, 0.10)"
+        soft: "0 24px 80px rgba(15, 23, 42, 0.10)",
+        card: "0 16px 44px rgba(15, 23, 42, 0.08)"
       },
       fontFamily: {
         display: ["var(--font-display)", "Georgia", "serif"],

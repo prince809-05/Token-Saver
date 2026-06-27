@@ -35,6 +35,7 @@ export type SavedTemplate = {
   id: string;
   title: string;
   category: TemplateCategory;
+  tags: string[];
   content: string;
   sourceTool?: ToolId;
   createdAt: string;

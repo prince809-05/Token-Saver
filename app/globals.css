@@ -4,9 +4,9 @@
 
 :root {
   color-scheme: light;
-  --background: #fbf7ee;
-  --foreground: #17211b;
-  --font-display: "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  --background: #f8fafc;
+  --foreground: #172026;
+  --font-display: "Segoe UI", Aptos, Arial, sans-serif;
   --font-sans: Aptos, "Segoe UI", Verdana, sans-serif;
 }
 
@@ -20,7 +20,7 @@ html {
 
 body {
   min-height: 100vh;
-  background: linear-gradient(135deg, #fbf7ee 0%, #f3f6f1 48%, #edf4f8 100%);
+  background: linear-gradient(135deg, #f8fafc 0%, #eef2f7 48%, #f6f8fb 100%);
   color: var(--foreground);
   font-family: var(--font-sans), ui-sans-serif, system-ui;
 }
@@ -33,11 +33,12 @@ textarea,
 input,
 select {
   outline: none;
+  font-size: 16px;
 }
 
 .grid-paper {
   background-image:
-    linear-gradient(rgba(23, 33, 27, 0.055) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(23, 33, 27, 0.055) 1px, transparent 1px);
+    linear-gradient(rgba(23, 32, 38, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(23, 32, 38, 0.045) 1px, transparent 1px);
   background-size: 28px 28px;
 }

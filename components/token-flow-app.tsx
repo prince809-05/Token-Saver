@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Button, Card, FieldLabel, Metric, TextArea } from "@/components/ui";
-import { parsePdfToMarkdown } from "@/lib/pdf";
+import { parsePdfToMarkdown, pdfErrorMessage } from "@/lib/pdf";
 import type { PdfMode, ProviderId, SavedTemplate, TemplateCategory, ToolId, UsagePlanId } from "@/types";
 import { cleanContext, downloadTextFile, optimizePrompt } from "@/utils/text";
 import {
@@ -37,13 +37,13 @@ const tools: Array<{ id: ToolId; title: string; description: string; accent: str
     id: "cleaner",
     title: "Context Cleaner",
     description: "Remove repeated lines, filler, and whitespace from long context.",
-    accent: "bg-[#789461]"
+    accent: "bg-cyan-600"
   },
   {
     id: "templates",
     title: "Task Vault",
     description: "Save tasks and launch them into work platforms.",
-    accent: "bg-[#d69961]"
+    accent: "bg-amber-600"
   }
 ];
 
@@ -90,6 +90,25 @@ const taskSourceLabels: Record<ToolId, string> = {
   templates: "Task Vault"
 };
 
+type TemplateDraft = {
+  title: string;
+  category: TemplateCategory;
+  tags: string;
+  content: string;
+};
+
+const templatesStorageKey = "tokenflow-templates";
+const repoStorageKey = "tokenflow-github-repo";
+
+function emptyTemplateDraft(): TemplateDraft {
+  return {
+    title: "",
+    category: "Study",
+    tags: "",
+    content: ""
+  };
+}
+
 function useToast() {
   const [message, setMessage] = useState("");
 
@@ -107,7 +126,19 @@ async function copyText(text: string, onDone: (message: string) => void) {
   }
 
   try {
-    await navigator.clipboard.writeText(text);
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const textArea = document.createElement("textarea");
+      textArea.value = text;
+      textArea.setAttribute("readonly", "");
+      textArea.style.position = "fixed";
+      textArea.style.left = "-9999px";
+      document.body.append(textArea);
+      textArea.select();
+      document.execCommand("copy");
+      textArea.remove();
+    }
     onDone("Copied to clipboard");
   } catch {
     onDone("Clipboard permission blocked");
@@ -115,15 +146,107 @@ async function copyText(text: string, onDone: (message: string) => void) {
 }
 
 function createId() {
-  return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function isTemplateCategory(value: unknown): value is TemplateCategory {
+  return templateCategories.includes(value as TemplateCategory);
+}
+
+function isToolId(value: unknown): value is ToolId {
+  return tools.some((tool) => tool.id === value);
+}
+
+function normalizeTags(input: string | string[]) {
+  const values = Array.isArray(input) ? input : input.split(/[,\n]/);
+  const seen = new Set<string>();
+
+  return values
+    .map((tag) =>
+      tag
+        .replace(/^#/, "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9 -]/g, "")
+        .replace(/\s+/g, "-")
+        .slice(0, 28)
+    )
+    .filter((tag) => tag.length >= 2)
+    .filter((tag) => {
+      if (seen.has(tag)) {
+        return false;
+      }
+      seen.add(tag);
+      return true;
+    })
+    .slice(0, 10);
+}
+
+function tagInputValue(tags: string[]) {
+  return tags.join(", ");
+}
+
+function generatedTags(sourceTool: ToolId, category: TemplateCategory) {
+  return normalizeTags([sourceTool, category, taskSourceLabels[sourceTool]]);
+}
+
+function normalizeTemplate(template: unknown): SavedTemplate | null {
+  if (!template || typeof template !== "object") {
+    return null;
+  }
+
+  const record = template as Partial<SavedTemplate> & { tags?: unknown };
+  const title = typeof record.title === "string" ? record.title.trim() : "";
+  const content = typeof record.content === "string" ? record.content.trim() : "";
+
+  if (!title || !content) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+  const category = isTemplateCategory(record.category) ? record.category : "Custom";
+  const tags =
+    Array.isArray(record.tags) && record.tags.every((tag) => typeof tag === "string")
+      ? normalizeTags(record.tags)
+      : typeof record.tags === "string"
+        ? normalizeTags(record.tags)
+        : normalizeTags([category]);
+
+  return {
+    id: typeof record.id === "string" && record.id ? record.id : createId(),
+    title,
+    category,
+    tags,
+    content,
+    sourceTool: isToolId(record.sourceTool) ? record.sourceTool : undefined,
+    createdAt: typeof record.createdAt === "string" ? record.createdAt : now,
+    updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : now
+  };
+}
+
+function safeSetLocalStorage(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Storage can be unavailable in private windows or locked-down browsers.
+  }
 }
 
 function platformUrl(platform: "github" | "trello" | "todoist" | "email" | "notion", task: SavedTemplate, repo: string) {
   const title = encodeURIComponent(task.title);
-  const body = encodeURIComponent(task.content);
+  const body = encodeURIComponent(
+    [task.content, task.tags.length ? `\n\nTags: ${task.tags.map((tag) => `#${tag}`).join(" ")}` : ""].join("")
+  );
 
   if (platform === "github") {
-    const cleanRepo = repo.trim().replace(/^https:\/\/github.com\//, "").replace(/\/$/, "");
+    const cleanRepo = repo
+      .trim()
+      .replace(/^https?:\/\/(www\.)?github\.com\//, "")
+      .replace(/^github\.com\//, "")
+      .replace(/\/$/, "")
+      .split("/")
+      .slice(0, 2)
+      .join("/");
     return cleanRepo ? `https://github.com/${cleanRepo}/issues/new?title=${title}&body=${body}` : "";
   }
 
@@ -152,26 +275,29 @@ export function TokenFlowApp() {
   const [cleanerInput, setCleanerInput] = useState("");
   const [pdfMode, setPdfMode] = useState<PdfMode>("Study notes");
   const [pdfMarkdown, setPdfMarkdown] = useState("");
+  const [pdfFileName, setPdfFileName] = useState("");
   const [isParsingPdf, setIsParsingPdf] = useState(false);
   const [templates, setTemplates] = useState<SavedTemplate[]>([]);
-  const [templateDraft, setTemplateDraft] = useState({
-    title: "",
-    category: "Study" as TemplateCategory,
-    content: ""
-  });
+  const [templateDraft, setTemplateDraft] = useState<TemplateDraft>(emptyTemplateDraft);
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [githubRepo, setGithubRepo] = useState("");
   const [templateSearch, setTemplateSearch] = useState("");
   const [templateFilter, setTemplateFilter] = useState<TemplateCategory | "All">("All");
+  const [templateTagFilter, setTemplateTagFilter] = useState<string>("All");
+  const [storageReady, setStorageReady] = useState(false);
   const toast = useToast();
 
   useEffect(() => {
     try {
-      const saved = localStorage.getItem("tokenflow-templates");
-      const savedRepo = localStorage.getItem("tokenflow-github-repo");
+      const saved = localStorage.getItem(templatesStorageKey);
+      const savedRepo = localStorage.getItem(repoStorageKey);
 
       if (saved) {
-        setTemplates(JSON.parse(saved) as SavedTemplate[]);
+        const parsed = JSON.parse(saved) as unknown;
+
+        if (Array.isArray(parsed)) {
+          setTemplates(parsed.map(normalizeTemplate).filter((template): template is SavedTemplate => Boolean(template)));
+        }
       }
 
       if (savedRepo) {
@@ -179,16 +305,22 @@ export function TokenFlowApp() {
       }
     } catch {
       setTemplates([]);
+    } finally {
+      setStorageReady(true);
     }
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("tokenflow-templates", JSON.stringify(templates));
-  }, [templates]);
+    if (storageReady) {
+      safeSetLocalStorage(templatesStorageKey, JSON.stringify(templates));
+    }
+  }, [storageReady, templates]);
 
   useEffect(() => {
-    localStorage.setItem("tokenflow-github-repo", githubRepo);
-  }, [githubRepo]);
+    if (storageReady) {
+      safeSetLocalStorage(repoStorageKey, githubRepo);
+    }
+  }, [githubRepo, storageReady]);
 
   const optimization = useMemo(() => optimizePrompt(promptInput), [promptInput]);
   const cleaned = useMemo(() => cleanContext(cleanerInput), [cleanerInput]);
@@ -211,14 +343,29 @@ export function TokenFlowApp() {
 
     return templates.filter((template) => {
       const matchesFilter = templateFilter === "All" || template.category === templateFilter;
+      const matchesTag = templateTagFilter === "All" || template.tags.includes(templateTagFilter);
       const matchesSearch =
         !search ||
         template.title.toLowerCase().includes(search) ||
+        template.category.toLowerCase().includes(search) ||
+        (template.sourceTool ? taskSourceLabels[template.sourceTool].toLowerCase().includes(search) : false) ||
+        template.tags.some((tag) => tag.includes(search)) ||
         template.content.toLowerCase().includes(search);
 
-      return matchesFilter && matchesSearch;
+      return matchesFilter && matchesTag && matchesSearch;
     });
-  }, [templateFilter, templateSearch, templates]);
+  }, [templateFilter, templateSearch, templateTagFilter, templates]);
+
+  const allTemplateTags = useMemo(
+    () => Array.from(new Set(templates.flatMap((template) => template.tags))).sort((a, b) => a.localeCompare(b)),
+    [templates]
+  );
+
+  useEffect(() => {
+    if (templateTagFilter !== "All" && !allTemplateTags.includes(templateTagFilter)) {
+      setTemplateTagFilter("All");
+    }
+  }, [allTemplateTags, templateTagFilter]);
 
   const calculatorRows = useMemo(() => {
     return (Object.keys(MODEL_PRICING) as ProviderId[]).map((provider) => {
@@ -240,13 +387,15 @@ export function TokenFlowApp() {
       return;
     }
 
+    setPdfFileName(file.name);
+    setPdfMarkdown("");
     setIsParsingPdf(true);
     try {
       const markdown = await parsePdfToMarkdown(file, pdfMode);
       setPdfMarkdown(markdown);
       toast.show("PDF converted locally");
-    } catch {
-      toast.show("PDF parsing failed. Try a text-based PDF.");
+    } catch (error) {
+      toast.show(pdfErrorMessage(error));
     } finally {
       setIsParsingPdf(false);
     }
@@ -259,6 +408,7 @@ export function TokenFlowApp() {
     }
 
     const now = new Date().toISOString();
+    const tags = normalizeTags(templateDraft.tags);
 
     if (editingTemplateId) {
       setTemplates((current) =>
@@ -268,6 +418,7 @@ export function TokenFlowApp() {
                 ...template,
                 title: templateDraft.title,
                 category: templateDraft.category,
+                tags,
                 content: templateDraft.content,
                 updatedAt: now
               }
@@ -282,6 +433,7 @@ export function TokenFlowApp() {
           id: createId(),
           title: templateDraft.title,
           category: templateDraft.category,
+          tags,
           content: templateDraft.content,
           createdAt: now,
           updatedAt: now
@@ -291,7 +443,7 @@ export function TokenFlowApp() {
       toast.show("Task saved locally");
     }
 
-    setTemplateDraft({ title: "", category: "Study", content: "" });
+    setTemplateDraft(emptyTemplateDraft());
   }
 
   function saveGeneratedTask(title: string, content: string, sourceTool: ToolId, category: TemplateCategory = "Custom") {
@@ -307,6 +459,7 @@ export function TokenFlowApp() {
         id: createId(),
         title,
         category,
+        tags: generatedTags(sourceTool, category),
         content,
         sourceTool,
         createdAt: now,
@@ -321,6 +474,7 @@ export function TokenFlowApp() {
     setTemplateDraft({
       title: template.title,
       category: template.category,
+      tags: tagInputValue(template.tags),
       content: template.content
     });
     setEditingTemplateId(template.id);
@@ -364,8 +518,16 @@ export function TokenFlowApp() {
         throw new Error("Invalid task file");
       }
 
-      setTemplates((current) => [...imported, ...current]);
-      toast.show("Tasks imported");
+      const normalized = imported
+        .map(normalizeTemplate)
+        .filter((template): template is SavedTemplate => Boolean(template));
+
+      if (!normalized.length) {
+        throw new Error("No valid tasks");
+      }
+
+      setTemplates((current) => [...normalized, ...current]);
+      toast.show(`${normalized.length} task${normalized.length === 1 ? "" : "s"} imported`);
     } catch {
       toast.show("Import failed. Choose a TokenFlow JSON export.");
     }
@@ -375,9 +537,9 @@ export function TokenFlowApp() {
     <main className="min-h-screen overflow-hidden">
       <div className="grid-paper fixed inset-0 -z-10 opacity-40" />
       <div className="mx-auto flex w-full max-w-7xl gap-6 px-4 py-5 sm:px-6 lg:py-8">
-        <aside className="sticky top-8 hidden h-[calc(100vh-4rem)] w-72 shrink-0 flex-col justify-between rounded-2xl border border-white/80 bg-white/80 p-5 shadow-soft backdrop-blur lg:flex">
+        <aside className="sticky top-8 hidden h-[calc(100vh-4rem)] w-72 shrink-0 flex-col justify-between rounded-lg border border-white/80 bg-white/85 p-5 shadow-soft backdrop-blur lg:flex">
           <div>
-            <div className="rounded-xl bg-ink p-5 text-cream">
+            <div className="rounded-lg bg-ink p-5 text-cream">
               <p className="text-xs font-bold uppercase tracking-[0.24em] text-cream/60">TokenFlow</p>
               <h1 className="mt-3 text-3xl font-black leading-tight">Tasks, prompts, and tokens in one place.</h1>
             </div>
@@ -386,7 +548,7 @@ export function TokenFlowApp() {
                 <button
                   key={tool.id}
                   onClick={() => setActiveTool(tool.id)}
-                  className={`w-full rounded-xl px-4 py-3 text-left transition ${
+                  className={`w-full rounded-lg px-4 py-3 text-left transition ${
                     activeTool === tool.id
                       ? "bg-moss text-leaf shadow-inner"
                       : "text-ink/65 hover:bg-cream"
@@ -398,13 +560,13 @@ export function TokenFlowApp() {
               ))}
             </nav>
           </div>
-          <div className="rounded-xl bg-cream p-4 text-sm text-ink/65">
+          <div className="rounded-lg bg-cream p-4 text-sm text-ink/65">
             Browser-first saves with platform links for GitHub, Trello, Todoist, email, and Notion.
           </div>
         </aside>
 
         <section className="min-w-0 flex-1">
-          <header className="mb-6 rounded-2xl border border-white/80 bg-white/80 p-5 shadow-soft backdrop-blur md:p-7">
+          <header className="mb-6 rounded-lg border border-white/80 bg-white/85 p-5 shadow-soft backdrop-blur md:p-7">
             <div className="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
               <div>
                 <p className="text-sm font-black uppercase tracking-[0.22em] text-leaf">Vercel-ready workspace</p>
@@ -428,7 +590,7 @@ export function TokenFlowApp() {
               <button
                 key={tool.id}
                 onClick={() => setActiveTool(tool.id)}
-                className={`group rounded-xl border p-4 text-left transition hover:-translate-y-1 hover:shadow-card ${
+                className={`group rounded-lg border p-4 text-left transition hover:-translate-y-1 hover:shadow-card ${
                   activeTool === tool.id ? "border-leaf bg-white" : "border-white/75 bg-white/55"
                 }`}
               >
@@ -530,7 +692,7 @@ export function TokenFlowApp() {
                   <div>
                     <FieldLabel>Mode</FieldLabel>
                     <select
-                      className="mt-2 w-full rounded-2xl border border-sand bg-cream p-3 font-semibold"
+                      className="mt-2 w-full rounded-lg border border-sand bg-cream p-3 font-semibold"
                       value={pdfMode}
                       onChange={(event) => setPdfMode(event.target.value as PdfMode)}
                     >
@@ -539,16 +701,38 @@ export function TokenFlowApp() {
                       ))}
                     </select>
                   </div>
-                  <label className="flex min-h-64 cursor-pointer flex-col items-center justify-center rounded-[2rem] border-2 border-dashed border-leaf/30 bg-moss/70 p-8 text-center transition hover:border-leaf">
-                    <span className="font-display text-3xl font-black text-leaf">Drop or choose PDF</span>
+                  <label
+                    className={`flex min-h-64 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 text-center transition ${
+                      isParsingPdf
+                        ? "border-sand bg-cream text-ink/50"
+                        : "border-leaf/30 bg-moss/80 hover:border-leaf hover:bg-white"
+                    }`}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      void handlePdf(event.dataTransfer.files?.[0]);
+                    }}
+                  >
+                    <span className="text-2xl font-black text-leaf">Drop or choose PDF</span>
                     <span className="mt-3 text-sm leading-6 text-ink/60">
-                      Parsing runs locally to reduce backend cost. Scanned PDFs may need OCR later.
+                      Text-based PDFs up to 30 MB are converted locally.
                     </span>
+                    {pdfFileName && (
+                      <span className="mt-4 max-w-full truncate rounded-full border border-leaf/15 bg-white px-3 py-1 text-xs font-black text-ink/65">
+                        {pdfFileName}
+                      </span>
+                    )}
                     <input
                       type="file"
                       accept="application/pdf"
                       className="sr-only"
-                      onChange={(event) => handlePdf(event.target.files?.[0])}
+                      disabled={isParsingPdf}
+                      onChange={(event) => {
+                        void handlePdf(event.target.files?.[0]);
+                        event.currentTarget.value = "";
+                      }}
                     />
                   </label>
                   {isParsingPdf && <p className="text-sm font-bold text-leaf">Parsing PDF...</p>}
@@ -556,8 +740,8 @@ export function TokenFlowApp() {
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <FieldLabel>Markdown</FieldLabel>
-                    <div className="flex gap-2">
-                      <Button variant="secondary" onClick={() => copyText(pdfMarkdown, toast.show)}>
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="secondary" onClick={() => copyText(pdfMarkdown, toast.show)} disabled={!pdfMarkdown}>
                         Copy Markdown
                       </Button>
                       <Button
@@ -574,7 +758,12 @@ export function TokenFlowApp() {
                       </Button>
                     </div>
                   </div>
-                  <TextArea className="min-h-[32rem] font-mono" value={pdfMarkdown} onChange={(event) => setPdfMarkdown(event.target.value)} />
+                  <TextArea
+                    className="min-h-[32rem] font-mono"
+                    value={pdfMarkdown}
+                    onChange={(event) => setPdfMarkdown(event.target.value)}
+                    placeholder="Converted markdown appears here..."
+                  />
                 </div>
               </div>
             </Card>
@@ -606,11 +795,11 @@ export function TokenFlowApp() {
                     placeholder="Paste text to estimate token usage..."
                   />
                 </div>
-                <div className="space-y-4 rounded-xl bg-cream p-5">
+                <div className="space-y-4 rounded-lg border border-sand/70 bg-cream/85 p-5">
                   <div>
                     <FieldLabel>What are you using?</FieldLabel>
                     <select
-                      className="mt-3 w-full rounded-xl border border-sand bg-white p-3 font-bold"
+                      className="mt-3 w-full rounded-lg border border-sand bg-white p-3 font-bold"
                       value={selectedPlan}
                       onChange={(event) => setSelectedPlan(event.target.value as UsagePlanId)}
                     >
@@ -627,7 +816,7 @@ export function TokenFlowApp() {
                       <input
                         type="number"
                         min={1000}
-                        className="mt-3 w-full rounded-xl border border-sand bg-white p-3 text-lg font-black"
+                        className="mt-3 w-full rounded-lg border border-sand bg-white p-3 text-lg font-black"
                         value={customBudgetTokens}
                         onChange={(event) => setCustomBudgetTokens(Number(event.target.value))}
                       />
@@ -637,7 +826,7 @@ export function TokenFlowApp() {
                   <input
                     type="number"
                     min={0}
-                    className="w-full rounded-xl border border-sand bg-white p-3 text-lg font-black"
+                    className="w-full rounded-lg border border-sand bg-white p-3 text-lg font-black"
                     value={expectedOutputTokens}
                     onChange={(event) => setExpectedOutputTokens(Number(event.target.value))}
                   />
@@ -674,7 +863,7 @@ export function TokenFlowApp() {
                 <Metric label="Remaining" value={tokenBudgetAnalysis.remainingTokens.toLocaleString()} />
                 <Metric label="Similar tasks" value={tokenBudgetAnalysis.similarTasks} tone="warm" />
               </div>
-              <div className="mt-5 rounded-xl border border-sand bg-white p-5">
+              <div className="mt-5 rounded-lg border border-sand bg-white p-5">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <div>
                     <p className="text-xs font-black uppercase tracking-[0.16em] text-clay">{selectedPlanPreset.label}</p>
@@ -696,7 +885,7 @@ export function TokenFlowApp() {
                 </div>
               </div>
               {calculatorInput && (
-                <div className="mt-5 rounded-xl border border-leaf/15 bg-moss p-5">
+                <div className="mt-5 rounded-lg border border-leaf/15 bg-moss p-5">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div>
                       <p className="text-xs font-black uppercase tracking-[0.16em] text-leaf">Optimizer preview</p>
@@ -717,8 +906,8 @@ export function TokenFlowApp() {
                   </div>
                 </div>
               )}
-              <div className="mt-6 overflow-hidden rounded-xl border border-sand bg-white">
-                <table className="w-full text-left text-sm">
+              <div className="mt-6 overflow-x-auto rounded-lg border border-sand bg-white">
+                <table className="min-w-[42rem] w-full text-left text-sm">
                   <thead className="bg-moss text-xs uppercase tracking-[0.16em] text-leaf">
                     <tr>
                       <th className="p-4">Provider</th>
@@ -813,16 +1002,16 @@ export function TokenFlowApp() {
                 description="Save any output as a task, export/import the vault, or launch a saved task into GitHub, Trello, Todoist, email, and Notion."
               />
               <div className="grid gap-5 xl:grid-cols-[0.8fr_1.2fr]">
-                <div className="space-y-4 rounded-xl bg-cream p-5">
+                <div className="space-y-4 rounded-lg border border-sand/70 bg-cream/85 p-5">
                   <FieldLabel>{editingTemplateId ? "Edit Task" : "New Task"}</FieldLabel>
                   <input
-                    className="w-full rounded-xl border border-sand bg-white p-3 font-bold"
+                    className="w-full rounded-lg border border-sand bg-white p-3 font-bold"
                     placeholder="Task title"
                     value={templateDraft.title}
                     onChange={(event) => setTemplateDraft({ ...templateDraft, title: event.target.value })}
                   />
                   <select
-                    className="w-full rounded-xl border border-sand bg-white p-3 font-bold"
+                    className="w-full rounded-lg border border-sand bg-white p-3 font-bold"
                     value={templateDraft.category}
                     onChange={(event) =>
                       setTemplateDraft({ ...templateDraft, category: event.target.value as TemplateCategory })
@@ -832,6 +1021,12 @@ export function TokenFlowApp() {
                       <option key={category}>{category}</option>
                     ))}
                   </select>
+                  <input
+                    className="w-full rounded-lg border border-sand bg-white p-3 font-bold"
+                    placeholder="Tags, e.g. research, client-a, urgent"
+                    value={templateDraft.tags}
+                    onChange={(event) => setTemplateDraft({ ...templateDraft, tags: event.target.value })}
+                  />
                   <TextArea
                     value={templateDraft.content}
                     onChange={(event) => setTemplateDraft({ ...templateDraft, content: event.target.value })}
@@ -842,10 +1037,10 @@ export function TokenFlowApp() {
                     <Button
                       variant="ghost"
                       onClick={() => {
-                        setTemplateDraft({ title: "", category: "Study", content: "" });
+                        setTemplateDraft(emptyTemplateDraft());
                         setEditingTemplateId(null);
                       }}
-                      disabled={!templateDraft.title && !templateDraft.content && !editingTemplateId}
+                      disabled={!templateDraft.title && !templateDraft.tags && !templateDraft.content && !editingTemplateId}
                     >
                       Reset
                     </Button>
@@ -854,7 +1049,7 @@ export function TokenFlowApp() {
                   <div className="border-t border-sand pt-4">
                     <FieldLabel>Platform setup</FieldLabel>
                     <input
-                      className="mt-3 w-full rounded-xl border border-sand bg-white p-3 font-bold"
+                      className="mt-3 w-full rounded-lg border border-sand bg-white p-3 font-bold"
                       placeholder="GitHub repo, e.g. owner/repo"
                       value={githubRepo}
                       onChange={(event) => setGithubRepo(event.target.value)}
@@ -863,7 +1058,7 @@ export function TokenFlowApp() {
                       <Button variant="secondary" onClick={exportTasks} disabled={!templates.length}>
                         Export JSON
                       </Button>
-                      <label className="inline-flex min-h-10 cursor-pointer items-center justify-center rounded-lg bg-moss px-4 py-2 text-sm font-bold text-leaf transition hover:bg-[#e3f0dc]">
+                      <label className="inline-flex min-h-10 cursor-pointer items-center justify-center rounded-md bg-moss px-4 py-2 text-sm font-bold text-leaf transition hover:bg-white">
                         Import JSON
                         <input
                           type="file"
@@ -876,15 +1071,15 @@ export function TokenFlowApp() {
                   </div>
                 </div>
                 <div className="grid gap-4">
-                  <div className="grid gap-3 rounded-xl border border-sand/70 bg-white p-4 md:grid-cols-[1fr_12rem]">
+                  <div className="grid gap-3 rounded-lg border border-sand/70 bg-white p-4 lg:grid-cols-[1fr_11rem_11rem]">
                     <input
-                      className="w-full rounded-xl border border-sand bg-cream p-3 font-bold"
-                      placeholder="Search saved tasks"
+                      className="w-full rounded-lg border border-sand bg-cream p-3 font-bold"
+                      placeholder="Search titles, tags, tools, or content"
                       value={templateSearch}
                       onChange={(event) => setTemplateSearch(event.target.value)}
                     />
                     <select
-                      className="w-full rounded-xl border border-sand bg-cream p-3 font-bold"
+                      className="w-full rounded-lg border border-sand bg-cream p-3 font-bold"
                       value={templateFilter}
                       onChange={(event) => setTemplateFilter(event.target.value as TemplateCategory | "All")}
                     >
@@ -893,19 +1088,31 @@ export function TokenFlowApp() {
                         <option key={category}>{category}</option>
                       ))}
                     </select>
+                    <select
+                      className="w-full rounded-lg border border-sand bg-cream p-3 font-bold"
+                      value={templateTagFilter}
+                      onChange={(event) => setTemplateTagFilter(event.target.value)}
+                    >
+                      <option>All</option>
+                      {allTemplateTags.map((tag) => (
+                        <option key={tag} value={tag}>
+                          #{tag}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   {templates.length === 0 && (
-                    <div className="rounded-xl border border-dashed border-sand bg-white/70 p-8 text-center text-ink/58">
+                    <div className="rounded-lg border border-dashed border-sand bg-white/70 p-8 text-center text-ink/58">
                       No saved tasks yet. Save from any tool or create one here.
                     </div>
                   )}
                   {templates.length > 0 && visibleTemplates.length === 0 && (
-                    <div className="rounded-xl border border-dashed border-sand bg-white/70 p-8 text-center text-ink/58">
+                    <div className="rounded-lg border border-dashed border-sand bg-white/70 p-8 text-center text-ink/58">
                       No saved tasks match this search.
                     </div>
                   )}
                   {visibleTemplates.map((template) => (
-                    <article key={template.id} className="rounded-xl border border-sand/70 bg-white p-5">
+                    <article key={template.id} className="rounded-lg border border-sand/70 bg-white p-5">
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
                           <p className="text-xs font-black uppercase tracking-[0.16em] text-clay">
@@ -914,7 +1121,7 @@ export function TokenFlowApp() {
                           </p>
                           <h3 className="mt-1 text-xl font-black text-ink">{template.title}</h3>
                         </div>
-                        <div className="flex gap-2">
+                        <div className="flex flex-wrap gap-2">
                           <Button variant="secondary" onClick={() => copyText(template.content, toast.show)}>
                             Copy
                           </Button>
@@ -926,7 +1133,24 @@ export function TokenFlowApp() {
                           </Button>
                         </div>
                       </div>
-                      <p className="mt-4 whitespace-pre-wrap rounded-xl bg-cream p-4 text-sm leading-6 text-ink/70">
+                      {template.tags.length > 0 && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {template.tags.map((tag) => (
+                            <button
+                              key={tag}
+                              type="button"
+                              onClick={() => {
+                                setTemplateTagFilter(tag);
+                                setActiveTool("templates");
+                              }}
+                              className="rounded-full border border-leaf/15 bg-moss px-3 py-1 text-xs font-black text-leaf transition hover:border-leaf/35 hover:bg-white"
+                            >
+                              #{tag}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <p className="mt-4 whitespace-pre-wrap rounded-lg bg-cream p-4 text-sm leading-6 text-ink/70">
                         {template.content}
                       </p>
                       <div className="mt-4 flex flex-wrap gap-2">
@@ -1005,7 +1229,7 @@ function MetricsGrid({ values }: { values: Array<[string, string | number]> }) {
 
 function ReasonList({ reasons }: { reasons: string[] }) {
   return (
-    <div className="mt-6 rounded-3xl bg-cream p-5">
+    <div className="mt-6 rounded-lg bg-cream p-5">
       <FieldLabel>Why optimization happened</FieldLabel>
       <div className="mt-3 flex flex-wrap gap-2">
         {reasons.map((reason) => (
